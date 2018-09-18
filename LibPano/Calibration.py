@@ -2,7 +2,70 @@ import cv2
 import numpy as np
 import sys
 
+def pyinitUndistortRectifyMap( K,D,R,T,P,size):
 
+    map1 = np.zeros((size[1],size[0]))
+    map2 = np.zeros((size[1],size[0]))
+    
+    #从内参矩阵K中取出归一化焦距fx,fy; cx,cy
+    f = np.array([K[0, 0], K[1, 1]]);
+    c = np.array([K[0, 2], K[1, 2]]);
+    
+    #从畸变系数矩阵D中取出畸变系数k1,k2,k3,k4
+    k = D[0:4]
+
+    
+    #旋转矩阵RR转换数据类型为CV_64F，如果不需要旋转，则RR为单位阵
+    RR  = np.eye(3)
+    RR,jacb = cv2.Rodrigues(R)
+    
+    
+    #新的内参矩阵PP转换数据类型为CV_64F
+    PP  = np.eye(3)
+    PP = P
+
+    #关键一步：新的内参矩阵*旋转矩阵，然后利用SVD分解求出逆矩阵iR，后面用到
+    iR = np.linalg.pinv(np.dot(PP , RR))
+
+    #反向映射，遍历目标图像所有像素位置，找到畸变图像中对应位置坐标(u,v)，并分别保存坐标(u,v)到mapx和mapy中
+    for i in np.arange(size[1]):#width
+    
+
+        #二维图像平面坐标系->摄像机坐标系
+        _x = i*iR[0, 1] + iR[0, 2],
+        _y = i*iR[1, 1] + iR[1, 2],
+        _w = i*iR[2, 1] + iR[2, 2];
+        for j in np.arange(size[0]):#height
+            #归一化摄像机坐标系，相当于假定在Z=1平面上
+            x = _x/_w
+            y = _y/_w;
+
+            #求鱼眼半球体截面半径r
+            r = np.sqrt(x*x + y*y);
+            #求鱼眼半球面上一点与光心的连线和光轴的夹角Theta
+            theta = np.arctan(r);
+            #畸变模型求出theta_d，相当于有畸变的角度值
+            theta2 = theta*theta
+            theta4 = theta2*theta2
+            theta6 = theta4*theta2
+            theta8 = theta4*theta4;
+            theta_d = theta * (1 + k[0]*theta2 + k[1]*theta4 + k[2]*theta6 + k[3]*theta8);
+            #利用有畸变的Theta值，将摄像机坐标系下的归一化三维坐标，重投影到二维图像平面，得到(j,i)对应畸变图像中的(u,v)
+            scale = 1.0 if (r == 0) else theta_d / r
+            u = f[0]*x*scale + c[0];
+            v = f[1]*y*scale + c[1];
+
+            #保存(u,v)坐标到mapx,mapy
+            map1[i,j] = u
+            map2[i,j] = v
+
+            #这三条语句是上面 ”//二维图像平面坐标系->摄像机坐标系“的一部分，是矩阵iR的第一列，这样写能够简化计算
+            _x += iR[0, 0];
+            _y += iR[1, 0];
+            _w += iR[2, 0];
+        
+    
+    return np.array(map1,np.float32),np.array(map2,np.float32)
 
 
 filePath = "LibPano/Images/Calibrate/Fisheye/"
@@ -153,12 +216,67 @@ print("总体平均误差:{0}像素".format(total_err))
 #显示定标结果
 print("保存矫正图像")
 for i in np.arange(0,successImageNum):
-	R = np.eye(3)
-	
-	mapx,mapy = cv2.fisheye.initUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,R,intrinsic_matrix,image_size,cv2.CV_32FC1)
-	t = image_Seq[i]
-	t = cv2.remap(t,mapx,mapy,cv2.INTER_LINEAR)
+    R = np.eye(3)
+    mapx,mapy = cv2.fisheye.initUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,R,intrinsic_matrix,image_size,cv2.CV_32FC1)
+    t = image_Seq[i]
+    t = cv2.remap(t,mapx,mapy,cv2.INTER_LINEAR)
 
-	saveFileName = '{0}{1}{2}.jpg'.format(filePath,'result',i+1)
-	print("保存文件{0}".format(saveFileName))
-	cv2.imwrite(saveFileName,t)
+    saveFileName = '{0}{1}{2}.jpg'.format(filePath,'result',i+1)
+    print("保存文件{0}".format(saveFileName))
+    cv2.imwrite(saveFileName,t)
+
+for i in np.arange(0,successImageNum):
+    R = np.eye(3)
+    t = image_Seq[i]
+    rotation3x3,jacb = cv2.Rodrigues(-rotation_vectors[i]);
+
+    rot4x4 = np.zeros((4,4))
+    rot4x4[:3,:3] = rotation3x3
+    rot4x4[3,3] = 1
+    
+    
+    trans4x4 = np.eye(4)
+    trans4x4[:3,3] = translation_vectors[i][:,0]
+
+    
+    RTMat = np.dot(rot4x4,trans4x4)
+    
+    #RR = np.zeros((3,3))
+    #RR = cv2.estimateAffine3D(rotation_vectors[i])
+    #RR = RR.rotation();
+
+    #mapx,mapy = cv2.fisheye.initUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,R,intrinsic_matrix,image_size,cv2.CV_32FC1)
+    mapx,mapy = cv2.fisheye.initUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,-rotation_vectors[i],intrinsic_matrix,image_size,cv2.CV_32FC1)
+    mapx1,mapy1 = pyinitUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,-rotation_vectors[i],-translation_vectors[i],intrinsic_matrix,image_size)
+
+    
+    #mapx -= translation_vectors[i][0]
+    #mapy -= translation_vectors[i][1]
+
+    
+    w = t.shape[1]
+    h = t.shape[0]
+    f = 1
+
+    Mat2D3D = np.array([ [1, 0, -w/2],
+                        [0, 1, -h/2],
+                        [0, 0, 1],
+                        [0, 0, 1]])
+    Mat3D2D = np.array([ [f, 0, w/2, 0],
+                        [0, f, h/2, 0],
+                        [0, 0, 1, 0]])
+
+    crs = np.dot(Mat3D2D,Mat2D3D)
+    crs = np.dot(Mat2D3D,Mat3D2D)
+
+    M4x4 = np.dot(Mat3D2D,np.dot(trans4x4,np.dot(rot4x4,Mat2D3D)))
+
+    #t = cv2.warpPerspective(t,M4x4,(t.shape[1],t.shape[0]))
+
+    t = cv2.remap(t,mapx1,mapy1,cv2.INTER_LINEAR)
+
+
+
+    saveFileName = '{0}{1}{2}.jpg'.format(filePath,'result_org',i+1)
+    print("保存文件{0}".format(saveFileName))
+    cv2.imwrite(saveFileName,t)
