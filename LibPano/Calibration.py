@@ -1,6 +1,7 @@
 import cv2 
 import numpy as np
 import sys
+import ImageTransformation3D
 
 def pyinitUndistortRectifyMap( K,D,R,T,P,size):
 
@@ -28,17 +29,25 @@ def pyinitUndistortRectifyMap( K,D,R,T,P,size):
     iR = np.linalg.pinv(np.dot(PP , RR))
 
     #反向映射，遍历目标图像所有像素位置，找到畸变图像中对应位置坐标(u,v)，并分别保存坐标(u,v)到mapx和mapy中
-    for i in np.arange(size[1]):#width
+    for i in np.arange(size[1]):#height
     
-
+        print(i)
         #二维图像平面坐标系->摄像机坐标系
-        _x = i*iR[0, 1] + iR[0, 2],
-        _y = i*iR[1, 1] + iR[1, 2],
-        _w = i*iR[2, 1] + iR[2, 2];
-        for j in np.arange(size[0]):#height
+        #_x = i*iR[0, 1] + iR[0, 2],
+        #_y = i*iR[1, 1] + iR[1, 2],
+        #_w = i*iR[2, 1] + iR[2, 2];
+        for j in np.arange(size[0]):#width
+            it = i# - T[1]
+            jt = j# - T[0]
+            kt = T[2]
+            #二维图像平面坐标系->摄像机坐标系
+            _x = jt*iR[0, 0] +it*iR[0, 1] + iR[0, 2],
+            _y = jt*iR[1, 0] +it*iR[1, 1] + iR[1, 2],
+            _w = jt*iR[2, 0] +it*iR[2, 1] + iR[2, 2];
+
             #归一化摄像机坐标系，相当于假定在Z=1平面上
-            x = _x/_w
-            y = _y/_w;
+            x = _x/_w - T[0]/T[2]
+            y = _y/_w - T[1]/T[2];
 
             #求鱼眼半球体截面半径r
             r = np.sqrt(x*x + y*y);
@@ -57,12 +66,12 @@ def pyinitUndistortRectifyMap( K,D,R,T,P,size):
 
             #保存(u,v)坐标到mapx,mapy
             map1[i,j] = u
-            map2[i,j] = v
+            map2[i,j] = v 
 
             #这三条语句是上面 ”//二维图像平面坐标系->摄像机坐标系“的一部分，是矩阵iR的第一列，这样写能够简化计算
-            _x += iR[0, 0];
-            _y += iR[1, 0];
-            _w += iR[2, 0];
+            #_x += iR[0, 0];
+            #_y += iR[1, 0];
+            #_w += iR[2, 0];
         
     
     return np.array(map1,np.float32),np.array(map2,np.float32)
@@ -247,7 +256,7 @@ for i in np.arange(0,successImageNum):
 
     #mapx,mapy = cv2.fisheye.initUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,R,intrinsic_matrix,image_size,cv2.CV_32FC1)
     mapx,mapy = cv2.fisheye.initUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,-rotation_vectors[i],intrinsic_matrix,image_size,cv2.CV_32FC1)
-    mapx1,mapy1 = pyinitUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,-rotation_vectors[i],-translation_vectors[i],intrinsic_matrix,image_size)
+    #mapx1,mapy1 = pyinitUndistortRectifyMap(intrinsic_matrix,distortion_coeffs,-rotation_vectors[i],-translation_vectors[i],intrinsic_matrix,image_size)
 
     
     #mapx -= translation_vectors[i][0]
@@ -273,10 +282,28 @@ for i in np.arange(0,successImageNum):
 
     #t = cv2.warpPerspective(t,M4x4,(t.shape[1],t.shape[0]))
 
-    t = cv2.remap(t,mapx1,mapy1,cv2.INTER_LINEAR)
+    t = cv2.remap(t,mapx,mapy,cv2.INTER_LINEAR)
 
 
 
     saveFileName = '{0}{1}{2}.jpg'.format(filePath,'result_org',i+1)
     print("保存文件{0}".format(saveFileName))
     cv2.imwrite(saveFileName,t)
+
+
+    imageTrans = ImageTransformation3D.ImageTransformer(saveFileName,(t.shape[0],t.shape[1],3))
+
+    rotvec = rotation_vectors[i]
+    transvec = translation_vectors[i]
+
+    theta =  -rotvec[0][0]
+    phi   =  -rotvec[1][0]
+    gamma =  -rotvec[2][0]
+    dx    =  transvec[0][0]  
+    dy    =  transvec[1][0]  
+    dz    =  transvec[2][0]  
+
+    #img = imageTrans.rotate_along_axis(np.rad2deg(theta), np.rad2deg(phi), np.rad2deg(gamma), dx, dy, dz)
+    img = imageTrans.rotate_along_axis(0,0,0, dx, dy, dz)
+    cv2.imshow('image',img)
+    cv2.waitKey(0)
